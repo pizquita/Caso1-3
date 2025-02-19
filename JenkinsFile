@@ -1,0 +1,111 @@
+pipeline {
+    agent any
+    environment {
+        SAM_CONFIG_PATH = 'samconfig.toml' // ruta al archivo de configuración de SAM
+        ENVIRONMENT = 'staging'  // entorno de despliegue
+    }
+    options {
+        skipDefaultCheckout true
+    }
+    stages {
+        stage('Get Code') {
+            steps {
+                cleanWs() 
+                sh 'echo $WORKSPACE'  // Verifica el workspace
+                
+               withCredentials([string(credentialsId: 'GitToken', variable: 'GITHUB_TOKEN')]) {
+                    git branch: 'develop', 
+                        url: "https://oauth2:${GITHUB_TOKEN}@github.com/pizquita/Caso1-3.git"
+                }
+                
+                sh '''
+                    ls -la
+                    echo $WORKSPACE
+                '''
+            }
+        }
+        stage('Static Test') {
+            steps {
+                catchError(buildResult: 'SUCCESS') {  
+                    sh '''
+                        . /opt/venv/jenkins/bin/activate
+                        flake8 --format=pylint --exit-zero --output-file=flake8.out src || true
+                    '''
+                    //cat flake8.out
+                    recordIssues tools: [flake8(pattern: 'flake8.out')]
+                }
+                
+                catchError(buildResult: 'SUCCESS') {
+                    sh '''
+                        . /opt/venv/jenkins/bin/activate
+                        bandit -r src -f json -o bandit.out --exit-zero || true
+                    '''
+                    //cat bandit.out
+                    
+                    recordIssues(tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')])
+                    
+                }
+            }
+        }
+       stage('Build and Validate') {
+            steps {
+                script {
+                    // Activar el entorno virtual de Python si es necesario
+                    sh '. /opt/venv/jenkins/bin/activate'
+
+                    // Validar que el archivo samconfig.toml existe
+                    sh 'if [ ! -f $SAM_CONFIG_PATH ]; then echo "samconfig.toml not found!"; exit 1; fi'
+
+                    // Construir la aplicación con AWS SAM
+                    sh 'sam build'
+
+                    // Validar la configuración de SAM antes de desplegar
+                    sh 'sam validate --region us-east-1'
+                }
+            }
+        }
+        stage('Check for Changes') {
+            steps {
+                //solo despliego si detecta cambios en el código
+                script {
+                    def changes = sh(script: "git diff --quiet || echo 'changed'", returnStdout: true).trim()
+                    if (changes == "changed") {
+                        echo "Changes detected, proceeding with deployment."
+                        sh '''
+                            sam deploy --resolve-s3 --config-file $SAM_CONFIG_PATH --config-env $ENVIRONMENT --no-confirm-changeset
+                        '''
+                    } else {
+                        echo "No changes detected, skipping deployment."
+                    }
+                }
+            }
+        }
+        stage('Rest Test') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    //SET PYTHONPATH=%WORKSPACE%
+                    //sh '. /opt/venv/jenkins/bin/activate'
+                    
+                    sh '''
+                        . /opt/venv/jenkins/bin/activate
+                        pytest test/integration/todoApiTest.py --junitxml=result-unit.xml
+                    '''
+                    junit 'result-unit.xml'
+                }
+            }
+        }
+        stage('Promote') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    
+                    sh '''
+                       git status
+                       git checkout master
+                       git merge develop
+                       git push
+                    '''
+                }
+            }
+        }
+    }
+}
