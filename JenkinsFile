@@ -26,7 +26,7 @@ pipeline {
         }
         stage('Static Test') {
             steps {
-                catchError(buildResult: 'SUCCESS') {  
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     sh '''
                         . /opt/venv/jenkins/bin/activate
                         flake8 --format=pylint --exit-zero --output-file=flake8.out src || true
@@ -35,7 +35,7 @@ pipeline {
                     recordIssues tools: [flake8(pattern: 'flake8.out')]
                 }
                 
-                catchError(buildResult: 'SUCCESS') {
+               catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                     sh '''
                         . /opt/venv/jenkins/bin/activate
                         bandit -r src -f json -o bandit.out --exit-zero || true
@@ -50,9 +50,7 @@ pipeline {
        stage('Build and Validate') {
             steps {
                 script {
-                    // Activar el entorno virtual de Python si es necesario
-                    sh '. /opt/venv/jenkins/bin/activate'
-
+                    
                     // Validar que el archivo samconfig.toml existe
                     sh 'if [ ! -f $SAM_CONFIG_PATH ]; then echo "samconfig.toml not found!"; exit 1; fi'
 
@@ -64,7 +62,7 @@ pipeline {
                 }
             }
         }
-        stage('Check for Changes') {
+        stage('Deploy') {
             steps {
                 //solo despliego si detecta cambios en el código
                 script {
@@ -83,9 +81,7 @@ pipeline {
         stage('Rest Test') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    //SET PYTHONPATH=%WORKSPACE%
-                    //sh '. /opt/venv/jenkins/bin/activate'
-                    
+                                        
                     sh '''
                         . /opt/venv/jenkins/bin/activate
                         pytest test/integration/todoApiTest.py --junitxml=result-unit.xml
