@@ -2,7 +2,7 @@ pipeline {
     agent any
     environment {
         SAM_CONFIG_PATH = 'samconfig.toml' // ruta al archivo de configuración de SAM
-        ENVIRONMENT = 'staging'  // entorno de despliegue
+        ENVIRONMENT = 'production'  // entorno de despliegue
     }
     options {
         skipDefaultCheckout true
@@ -14,7 +14,7 @@ pipeline {
                 sh 'echo $WORKSPACE'  // Verifica el workspace
                 
                withCredentials([string(credentialsId: 'GitToken', variable: 'GITHUB_TOKEN')]) {
-                    git branch: 'develop', 
+                    git branch: 'master', 
                         url: "https://oauth2:${GITHUB_TOKEN}@github.com/pizquita/Caso1-3.git"
                 }
                 
@@ -24,30 +24,7 @@ pipeline {
                 '''
             }
         }
-        stage('Static Test') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    sh '''
-                        . /opt/venv/jenkins/bin/activate
-                        flake8 --format=pylint --exit-zero --output-file=flake8.out src || true
-                    '''
-                    //cat flake8.out
-                    recordIssues tools: [flake8(pattern: 'flake8.out')]
-                }
-                
-               catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
-                    sh '''
-                        . /opt/venv/jenkins/bin/activate
-                        bandit -r src -f json -o bandit.out --exit-zero || true
-                    '''
-                    //cat bandit.out
-                    
-                    recordIssues(tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')])
-                    
-                }
-            }
-        }
-       stage('Build and Validate') {
+        stage('Deploy') {
             steps {
                 script {
                     
@@ -60,10 +37,8 @@ pipeline {
                     // Validar la configuración de SAM antes de desplegar
                     sh 'sam validate --region us-east-1'
                 }
-            }
-        }
-        stage('Deploy') {
-            steps {
+                
+                    
                 //solo despliego si detecta cambios en el código
                 script {
                     def changes = sh(script: "git diff --quiet || echo 'changed'", returnStdout: true).trim()
@@ -75,31 +50,19 @@ pipeline {
                     } else {
                         echo "No changes detected, skipping deployment."
                     }
+                   
                 }
             }
         }
         stage('Rest Test') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                                        
-                    sh '''
-                        . /opt/venv/jenkins/bin/activate
-                        pytest test/integration/todoApiTest.py --junitxml=result-unit.xml
-                    '''
-                    junit 'result-unit.xml'
-                }
-            }
-        }
-        stage('Promote') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     
                     sh '''
-                       git status
-                       git checkout master
-                       git merge develop
-                       git push
+                        . /opt/venv/jenkins/bin/activate
+                        pytest test/integration/todoApiTest.py -m readonly --junitxml=result-unit.xml
                     '''
+                    junit 'result-unit.xml'
                 }
             }
         }
