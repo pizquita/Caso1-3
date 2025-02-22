@@ -9,3 +9,4 @@ bandit.out
 flake8.out
 result-unit.xml
 Jenkinsfile
+Jenkinsfile_agentes
