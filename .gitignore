@@ -8,4 +8,5 @@ coverage.xml
 bandit.out
 flake8.out
 result-unit.xml
-Jenkinsfile
+JenkinsFile
+Jenkinsfile_agentes
