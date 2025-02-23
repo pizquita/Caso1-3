@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        SAM_CONFIG_PATH = 'samconfig.toml' // ruta al archivo de configuración de SAM
+        SAM_CONFIG_PATH = 'repo-config/samconfig.toml' // ruta al archivo de configuración de SAM
         ENVIRONMENT = 'production'  // entorno de despliegue
     }
     options {
@@ -27,6 +27,16 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
+                    // Asegurar limpieza previa y clonar el repositorio
+                    sh 'rm -rf repo-config' // Asegurar limpieza previa
+                    sh 'git clone --branch $ENVIRONMENT https://github.com/pizquita/todo-config.git repo-config'
+                    
+                    // Verificar que la variable se ha asignado correctamente
+                    echo "SAM_CONFIG_PATH set to: ${env.SAM_CONFIG_PATH}"
+                    
+                    // Mostrar el contenido del archivo para ver si está bien clonado
+                    sh "cat ${env.SAM_CONFIG_PATH}"
+                    
                     
                     // Validar que el archivo samconfig.toml existe
                     sh 'if [ ! -f $SAM_CONFIG_PATH ]; then echo "samconfig.toml not found!"; exit 1; fi'
@@ -38,7 +48,12 @@ pipeline {
                     sh 'sam validate --region us-east-1'
                 }
                 
-                    
+                /* sh '''
+                    aws cloudformation delete-stack --stack-name todo-list-aws-production
+                    aws cloudformation wait stack-delete-complete --stack-name todo-list-aws-production
+                    sam deploy --resolve-s3 --config-file $SAM_CONFIG_PATH --config-env $ENVIRONMENT --no-confirm-changeset
+                '''
+                */
                 //solo despliego si detecta cambios en el código
                 script {
                     def changes = sh(script: "git diff --quiet || echo 'changed'", returnStdout: true).trim()
@@ -57,7 +72,17 @@ pipeline {
         stage('Rest Test') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                
+                //recupera la url de la api y se la asigna a la variable BASE_URL, que es la que recoge el archivo de pruebas 
+                script {
+                    def apiUrl = sh(script: '''
+                        aws cloudformation describe-stacks --stack-name todo-list-aws-production --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" --output text
+                    ''', returnStdout: true).trim()
                     
+                    env.BASE_URL = apiUrl
+                }
+                sh 'echo "BASE_URL: $BASE_URL"' // Para verificar la URL antes de correr los tests
+                
                     sh '''
                         . /opt/venv/jenkins/bin/activate
                         pytest test/integration/todoApiTest.py -m readonly --junitxml=result-unit.xml
