@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        SAM_CONFIG_PATH = 'samconfig.toml' // ruta al archivo de configuración de SAM
+        SAM_CONFIG_PATH = 'repo-config/samconfig.toml'
         ENVIRONMENT = 'staging'  // entorno de despliegue
     }
     options {
@@ -40,8 +40,6 @@ pipeline {
                         . /opt/venv/jenkins/bin/activate
                         bandit -r src -f json -o bandit.out --exit-zero || true
                     '''
-                    //cat bandit.out
-                    
                     recordIssues(tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')])
                     
                 }
@@ -50,6 +48,15 @@ pipeline {
        stage('Build and Validate') {
             steps {
                 script {
+                    // Asegurar limpieza previa y clonar el repositorio
+                    sh 'rm -rf repo-config' // Asegurar limpieza previa
+                    sh 'git clone --branch $ENVIRONMENT https://github.com/pizquita/todo-config.git repo-config'
+                    
+                    // Verificar que la variable se ha asignado correctamente
+                    echo "SAM_CONFIG_PATH set to: ${env.SAM_CONFIG_PATH}"
+                    
+                    // Mostrar el contenido del archivo para ver si está bien clonado
+                    sh "cat ${env.SAM_CONFIG_PATH}"
                     
                     // Validar que el archivo samconfig.toml existe
                     sh 'if [ ! -f $SAM_CONFIG_PATH ]; then echo "samconfig.toml not found!"; exit 1; fi'
@@ -64,6 +71,16 @@ pipeline {
         }
         stage('Deploy') {
             steps {
+                /*//Sección para mostrar en el log la creación del stack
+                 sh '''
+                    aws cloudformation delete-stack --stack-name todo-list-aws-staging
+                    aws cloudformation wait stack-delete-complete --stack-name todo-list-aws-staging
+                    sam deploy --resolve-s3 --config-file $SAM_CONFIG_PATH --config-env $ENVIRONMENT --no-confirm-changeset
+                '''
+                */
+                
+                 sh "cat $SAM_CONFIG_PATH"
+                 
                 //solo despliego si detecta cambios en el código
                 script {
                     def changes = sh(script: "git diff --quiet || echo 'changed'", returnStdout: true).trim()
@@ -80,6 +97,16 @@ pipeline {
         }
         stage('Rest Test') {
             steps {
+                
+                script {
+                    def apiUrl = sh(script: '''
+                        aws cloudformation describe-stacks --stack-name todo-list-aws-staging --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" --output text
+                    ''', returnStdout: true).trim()
+                    
+                    env.BASE_URL = apiUrl
+                }
+                sh 'echo "BASE_URL: $BASE_URL"' // Para verificar la URL antes de correr los tests
+                
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                                         
                     sh '''
@@ -93,12 +120,41 @@ pipeline {
         stage('Promote') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    
+                    //Evitamos mergear los jenkinsfile y el archivo de configuración para mantener en cada rama su versión
                     sh '''
-                       git status
-                       git checkout master
-                       git merge develop
-                       git push
+                        git status
+                        git checkout master
+                        git pull origin master  
+                        
+                        # Fusionar cambios de develop en master sin confirmar
+                        git merge --no-commit develop || echo "Conflictos detectados en la fusión"
+        
+                        # Evitar que se mergee JenkinsFile
+                        if git ls-files --unmerged | grep "JenkinsFile"; then
+                            echo "Manteniendo la versión de JenkinsFile en master"
+                            git checkout --ours JenkinsFile
+                            git add JenkinsFile
+                        fi
+        
+                        # Evitar que se mergee Jenkinsfile_agentes
+                        if git ls-files --unmerged | grep "Jenkinsfile_agentes"; then
+                            echo "Manteniendo la versión de Jenkinsfile_agentes en master"
+                            git checkout --ours Jenkinsfile_agentes
+                            git add Jenkinsfile_agentes
+                        fi
+        
+                        # Evitar que se suba repo-config
+                        git reset HEAD repo-config/ || true  
+                        
+                        # Verificar si hay cambios pendientes antes de commit
+                        if ! git diff-index --quiet HEAD; then
+                            git commit -m "Merge develop en master sin JenkinsFile, Jenkinsfile_agentes, ni repo-config"
+                        else
+                            echo "No hay cambios que confirmar"
+                        fi
+        
+                        # Subir los cambios a master
+                        git push origin master
                     '''
                 }
             }
