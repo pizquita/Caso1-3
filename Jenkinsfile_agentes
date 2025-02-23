@@ -134,12 +134,41 @@ pipeline {
                 sh 'hostname'
                 unstash 'source-code'  // Recupera el código del repositorio
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    
+                    //Evitamos mergear los jenkinsfile y el archivo de configuración para mantener en cada rama su versión
                     sh '''
-                       git status
-                       git checkout master
-                       git merge develop
-                       git push
+                        git status
+                        git checkout master
+                        git pull origin master  
+                        
+                        # Fusionar cambios de develop en master sin confirmar
+                        git merge --no-commit develop || echo "Conflictos detectados en la fusión"
+        
+                        # Evitar que se mergee JenkinsFile
+                        if git ls-files --unmerged | grep "JenkinsFile"; then
+                            echo "Manteniendo la versión de JenkinsFile en master"
+                            git checkout --ours JenkinsFile
+                            git add JenkinsFile
+                        fi
+        
+                        # Evitar que se mergee Jenkinsfile_agentes
+                        if git ls-files --unmerged | grep "Jenkinsfile_agentes"; then
+                            echo "Manteniendo la versión de Jenkinsfile_agentes en master"
+                            git checkout --ours Jenkinsfile_agentes
+                            git add Jenkinsfile_agentes
+                        fi
+        
+                        # Evitar que se suba repo-config
+                        git reset HEAD repo-config/ || true  
+                        
+                        # Verificar si hay cambios pendientes antes de commit
+                        if ! git diff-index --quiet HEAD; then
+                            git commit -m "Merge develop en master sin JenkinsFile, Jenkinsfile_agentes, ni repo-config"
+                        else
+                            echo "No hay cambios que confirmar"
+                        fi
+        
+                        # Subir los cambios a master
+                        git push origin master
                     '''
                 }
             }
